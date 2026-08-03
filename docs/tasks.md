@@ -11,9 +11,18 @@ is the Block 6 dependency pin bump, which branches off `main` only after
 the Block 5 retry-hardening phase has merged into it. Every other phase
 below branches off `main` regardless of what else is in flight.
 
+**Verification rule for this block:** every phase's step 2 checks the
+spec's claims against the real code before building anything. If what's
+changed is cosmetic — a rename, a moved file, same actual behavior and
+data shape — note it and keep going. If what's changed is structural —
+different fields, a described flow that no longer exists, something this
+phase depends on being removed or reworked — stop, fix `docs/spec.md`
+first, and only resume once the spec matches reality again.
+
 **Every phase ends the same way:** push the branch, open a PR against
 `main` (or, for the one dependent case, against the branch it depends
-on), and stop. Do not merge — that's the reviewer's call, per house rules.
+on), and stop. Do not merge — merging is gated on external approval, per
+house rules.
 
 ## Phase: Block 7 — spec and plan
 
@@ -30,11 +39,15 @@ on), and stop. Do not merge — that's the reviewer's call, per house rules.
 
 1. Branch off `main` in `genai-block5-agent`.
 2. Verify: does `main` still call the LLM and Neo4j the same way the
-   spec describes? If not, note the drift before continuing.
+   spec describes? Apply the verification rule above if not.
 3. Locate every call site that can fail transiently (LLM calls, Neo4j
-   calls) and add exponential backoff with a capped number of attempts.
+   calls) and add exponential backoff, using the retry count and timing
+   defined in the spec's LLM10 section — confirm those numbers against
+   Block 6's actual Phase 8 code first, and update the spec if they
+   differ.
 4. Add exception classification so permanent failures (bad input) fail
-   immediately instead of retrying.
+   immediately instead of retrying, using the retryable/non-retryable
+   error list defined in the same spec section.
 5. Write a test that simulates a transient failure and asserts the wait
    grows between attempts and the system gives up after the cap.
 6. Run the test suite, confirm everything passes, not just the new test.
@@ -51,8 +64,10 @@ on), and stop. Do not merge — that's the reviewer's call, per house rules.
 3. Write adversarial test cases: instruction-override attempts ("ignore
    prior instructions..."), attempts to extract the system prompt,
    attempts to steer parsed fields toward attacker-chosen values.
-4. For each test case, assert the parsed output stays within expected
-   type/domain/range, and that anything suspicious gets surfaced in
+4. For each test case, assert the parsed output against the plausibility
+   rule in the spec's LLM01 section (query the Neo4j graph once for its
+   real condition/lab/drug values, cache them, check parsed values
+   against that list), and that anything that fails gets surfaced in
    tracing rather than silently accepted.
 5. Run the suite, confirm results match what the spec commits to
    (flagged, not silently blocked with false certainty).
@@ -67,32 +82,48 @@ on), and stop. Do not merge — that's the reviewer's call, per house rules.
    prompt anywhere in the current code?
 3. Add the sanitization step where citations are constructed: strip or
    neutralize control sequences and instruction-like patterns.
-4. Add field-layer trimming so citations only carry what the answer
-   needs, not the full raw note.
-5. Write a regression test proving the sanitization holds structurally
-   (feed it a deliberately malicious note, confirm the dangerous part
-   never survives).
-6. Check Block 4's existing eval harness assertions on citation content
+4. Add field-layer trimming using the sentence-level keyword-containment
+   rule defined in the spec's LLM02 section — not a freeform judgment
+   call at implementation time.
+5. Write a unit-level regression test proving the sanitization function
+   holds structurally (feed it a deliberately malicious string directly,
+   confirm the dangerous part never survives).
+6. Write a second, end-to-end test: plant an injection attempt inside a
+   seed patient note, run it through the real pipeline (Block 1's note
+   generation, Block 3's storage, Block 4's retrieval, Block 6's citation
+   construction), and confirm it's neutralized by the time it reaches
+   `MultiAgentAnswer.citations`. This is the stronger proof — it tests
+   the real system, not an isolated function.
+7. Check Block 4's existing eval harness assertions on citation content
    against the now-trimmed citations — this is the open follow-up
    already flagged in the spec. Fix or update those assertions if they
    broke.
-7. Commit sanitization and trimming as one logical change (same code
-   path, same purpose).
-8. Push, open PR against `main`.
+8. Commit sanitization and trimming as one logical change (same code
+   path, same purpose), and the two tests as a separate commit.
+9. Push, open PR against `main`.
 
 ## Phase: Block 6 — state validation
 
 1. Branch off `main` in `genai-block6-multiagent`.
 2. Verify: is `MultiAgentState` still the mutable `TypedDict` the spec
-   describes, passed between the same nodes?
+   describes, passed between the same nodes, and does
+   `reconcile_node_safe` still call `_reconcile_error_answer` unguarded
+   inside its except block, the way this spec now describes?
 3. Add schema/type validation at each node boundary where state gets
    written.
 4. On a failed validation, log a clear warning and mark the entry as
    suspect rather than silently propagating it into reconciliation.
-5. Write a test that deliberately writes a malformed value at a node
+5. Wrap `reconcile_node_safe`'s call to `_reconcile_error_answer` in its
+   own try/except, falling back to a fixed literal `MultiAgentAnswer`
+   with no computed fields if that helper itself raises.
+6. Write a test that deliberately writes a malformed value at a node
    boundary and confirms it's caught and logged, not trusted.
-6. Commit.
-7. Push, open PR against `main`.
+7. Write a second test that forces `_reconcile_error_answer` to raise and
+   confirms the system still returns a valid answer instead of the
+   exception escaping.
+8. Commit the state validation and the reconciliation error-handling fix
+   as separate commits — two different concerns sharing one phase.
+9. Push, open PR against `main`.
 
 ## Phase: Block 6 — Cohort agent injection test and query-size visibility
 
@@ -103,8 +134,10 @@ on), and stop. Do not merge — that's the reviewer's call, per house rules.
    existing rigor — assert on the actual query structure and parameter
    dict sent to the driver, not just "no crash."
 4. Add logging of row count and runtime for each query execution.
-5. Add a configurable soft-alert threshold that flags unusually large
-   results in tracing.
+5. Add the soft-alert threshold defined in the spec's LLM10 section
+   (500 patients or 25% of total population, whichever is smaller, or
+   5+ second runtime) — treat these as defaults to tune once the real
+   dataset size is confirmed, not fixed forever.
 6. Confirm this new logging doesn't touch or duplicate Block 5's
    existing LLM cost/token tracking — different signal, different code
    path.
