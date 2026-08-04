@@ -196,8 +196,12 @@ house rules.
    — this phase doesn't start until that's true.
 2. Branch off `main` in `genai-block6-multiagent` (which now includes
    whatever was merged before this point).
-3. Update `requirements.txt` to reference Block 5's new commit.
-4. Run Block 6's test suite to confirm nothing broke from the bump.
+3. Update `requirements.txt`: replace the current floating
+   `block5_agent @ git+.../genai-block5-agent.git@main` reference with a
+   fixed commit hash pointing at Block 5's new retry-hardened commit —
+   this establishes a real pin for the first time, not a bump of an
+   existing one.
+4. Run Block 6's test suite to confirm nothing broke from the change.
 5. Commit — this is a one-line, single-purpose change.
 6. Push, open PR against `main`.
 

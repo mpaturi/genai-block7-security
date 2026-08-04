@@ -279,14 +279,17 @@ agent exists to solve, so instead result size/cost is logged with a
 configurable soft-alert threshold, making an anomalously large result set
 visible in tracing rather than silent.
 
-**Retry policy (default, pending confirmation against Block 6's actual
-Phase 8 numbers):** up to 3 retries (4 attempts total), exponential
-backoff starting at 1 second and doubling each attempt (1s, 2s, 4s), then
-give up and surface a clear error. Retryable: rate-limit responses,
-timeouts, connection errors. Not retryable, fail immediately: validation
-errors, authentication errors, malformed requests. These numbers should
-match Block 6's Phase 8 exactly for consistency — confirm against that
-code when implementing, and update here first if they differ.
+**Retry policy (confirmed against Block 6's actual Phase 8 code —
+`cohort_agent.py`'s `_MAX_TOOL_RETRIES`/`_RETRY_BACKOFF_SECONDS`):** up to
+2 retries (3 attempts total), linear backoff of `0.5 * (attempt + 1)`
+seconds (0.5s, then 1.0s), then give up and surface a clear error. Block
+5's answer-writing step keeps its own smaller, already-existing budget of
+1 retry (2 attempts total) rather than adopting the 3-attempt tool
+budget, since a retry there is a second, slower language-model call — it
+uses the same backoff formula, just with one gap (0.5s) instead of two.
+Retryable: rate-limit responses, timeouts, connection errors. Not
+retryable, fail immediately: validation errors, authentication errors,
+malformed requests.
 
 **Soft-alert threshold (default, pending confirmation against the real
 patient population size):** flag a Cohort agent query as unusually large
@@ -341,9 +344,6 @@ discoverable on inspection, not actively monitored.
 - Confirm citation field-minimization (LLM02, field layer) doesn't break
   Block 4's existing eval harness assertions on citation content — those
   tests may currently assert on full `chunk_text`.
-- Confirm the retry policy numbers (LLM10) against Block 6's actual
-  Phase 8 code — the spec's 3-retries/1s-2s-4s defaults need matching to
-  the real implementation, not just assumed.
 - Confirm the soft-alert threshold (LLM10, 500 patients or 25% of
   population) against the real total patient count in the graph — the
   default was chosen without knowing that number.

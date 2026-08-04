@@ -140,11 +140,15 @@ blocked" target — this is the piece that most literally satisfies the
 block's acceptance criterion around data-exfiltration attempts — and
 LLM10's "exhaustive query: flagged" target.
 
-**Block 6 — dependency pin bump.** Updates `requirements.txt` to
-reference Block 5's new retry-hardened commit once that phase merges, so
-the Clinical agent actually benefits from it. A version bump, not a
-feature change — its own minimal PR rather than folded into another
-phase.
+**Block 6 — dependency pin bump.** Confirmed against the actual
+`requirements.txt`: `block5_agent` is currently pinned to `@main`, a
+floating branch reference, not a commit — the exact LLM03 gap this spec
+documents. This phase converts it to a fixed commit hash for the first
+time, pointing at Block 5's new retry-hardened commit once that phase
+merges, so the Clinical agent actually benefits from it and Block 6's pin
+stops silently drifting. Establishing a real pin where none existed, not
+a version bump in the usual sense — but still a minimal, single-purpose
+PR rather than folded into another phase.
 
 **Block 7 — SECURITY.md.** Written last, after the phases above land,
 because it documents what's actually true and tested, not what's planned.
