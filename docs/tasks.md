@@ -56,6 +56,45 @@ house rules.
    cleanly — judgment call at implementation time).
 8. Push, open PR against `main`.
 
+## Phase: Block 4 — chunk sanitization and key scoping
+
+1. Branch off `main` in `genai-block4-rag-eval`.
+2. Verify: does `generate_answer` still build its prompt directly from
+   `chunk['chunk_text']` (`generate.py:57-61`), called unconditionally
+   from `api.py:116`? Does `QueryRequest` still have `question`,
+   `condition`, `drug`, `lab` as unbounded string fields? Apply the
+   verification rule above if not.
+3. Decide: sanitize `chunk_text` at ingestion (`ingest.py`, before it's
+   written to Pinecone) or immediately before `generate_answer` builds
+   its prompt — pick one, document the choice in the PR description,
+   since it determines whether Block 6's later citation-hardening phase
+   is testing a second layer or the only layer.
+4. Add a `max_length` cap to `QueryRequest`'s four free-text fields
+   (`question`, `condition`, `drug`, `lab`).
+5. In the Pinecone console, create a new API key scoped to
+   `DataPlaneViewer`, for the query path only.
+6. Update `retrieve.py` to read this new key from a new env var (e.g.
+   `PINECONE_QUERY_API_KEY`) instead of the shared `PINECONE_API_KEY`;
+   keep `create_index.py`, `ingest.py`, and `verify.py` on the existing
+   full-access `PINECONE_API_KEY`.
+7. Update `check_connection.py`'s smoke test to validate both keys —
+   today it only checks the one shared `PINECONE_API_KEY`, which would
+   silently stop covering the query path once it's split out.
+8. Write a test asserting the prompt `generate_answer` builds is clean
+   for a seed note containing a planted injection attempt.
+9. Write a test asserting a request with an over-length field is
+   rejected.
+10. Write a test that attempts a write/delete call using the new
+    query-scoped key and asserts Pinecone itself rejects it, not just
+    application logic. Note in the PR whether this test needs live
+    Pinecone credentials to run and how it's meant to execute in CI —
+    don't leave that undecided the way Block 8's PR was flagged for.
+11. Run the test suite, confirm everything passes, not just the new
+    tests.
+12. Commit the sanitization/length-cap change and the key-scoping change
+    as two separate commits — different concerns sharing one phase.
+13. Push, open PR against `main`.
+
 ## Phase: Block 5 — direct-injection test suite
 
 1. Branch off `main` in `genai-block5-agent`.
@@ -79,7 +118,10 @@ house rules.
 1. Branch off `main` in `genai-block6-multiagent`.
 2. Verify: is `chunk_text` still flowing into `MultiAgentAnswer.citations`
    the way the spec describes, and does it still never reach an LLM
-   prompt anywhere in the current code?
+   prompt in Block 5 or Block 6's own code? Also confirm whether the
+   Block 4 chunk-sanitization phase has merged, and if so, whether it
+   sanitizes at ingestion or at prompt-build time — that determines
+   whether citations arrive here already clean.
 3. Add the sanitization step where citations are constructed: strip or
    neutralize control sequences and instruction-like patterns.
 4. Add field-layer trimming using the sentence-level keyword-containment
@@ -92,8 +134,10 @@ house rules.
    seed patient note, run it through the real pipeline (Block 1's note
    generation, Block 3's storage, Block 4's retrieval, Block 6's citation
    construction), and confirm it's neutralized by the time it reaches
-   `MultiAgentAnswer.citations`. This is the stronger proof — it tests
-   the real system, not an isolated function.
+   `MultiAgentAnswer.citations`. If Block 4 now sanitizes at ingestion,
+   this test demonstrates defense-in-depth rather than being the only
+   layer catching it — note which in the PR description. This is the
+   stronger proof — it tests the real system, not an isolated function.
 7. Check Block 4's existing eval harness assertions on citation content
    against the now-trimmed citations — this is the open follow-up
    already flagged in the spec. Fix or update those assertions if they
@@ -165,7 +209,7 @@ house rules.
    plainly, plus the named Enterprise/Aura migration path.
 4. Write the pinning policy section, matching what's now actually
    implemented across the repos.
-5. Write one status line per risk (all five from the spec), each
+5. Write one status line per risk (all six from the spec), each
    pointing at the specific test that proves its blocked/flagged claim
    — link to the actual test file and test name, not a vague reference.
 6. Commit.

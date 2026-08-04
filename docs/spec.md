@@ -17,11 +17,11 @@ can't be fully closed (e.g. by a limitation of Neo4j Community Edition),
 the spec says so plainly instead of re-flagging it as if it were still
 open-ended.
 
-Five primary risks are mapped against OWASP Top 10 for LLM Applications
-(2025). Two adjacent risks are named but treated as secondary, since they
-belong more to Block 3/4's ingestion boundary than to Block 5/6's runtime.
-Three further categories are deliberately absent rather than silently
-skipped: LLM05 (Improper Output Handling) is not given its own section
+Six primary risks are mapped against OWASP Top 10 for LLM Applications
+(2025). One further risk is named but treated as adjacent, since it
+belongs more to Block 1/2's ingestion boundary than to Block 5/6's
+runtime. Three further categories are deliberately absent rather than
+silently skipped: LLM05 (Improper Output Handling) is not given its own section
 because its concerns here are already covered under LLM01 and LLM06 below;
 LLM07 (System Prompt Leakage) is folded into LLM01's direct-injection test
 cases rather than treated as a separate surface; and LLM09 (Misinformation)
@@ -49,10 +49,11 @@ the model into calling tools with attacker-chosen values, or attempts to
 get the model to reveal its system prompt. This is a live, user-controlled
 surface, not a hypothetical one.
 
-Indirect: raw patient note text (`chunk_text`) flows unsanitized into
-`MultiAgentAnswer.citations`. Verified independently from both directions
-against the current code (re-confirmed directly in response to review
-feedback, not just carried over from an earlier claim). In Block 6
+Indirect: raw patient note text (`chunk_text`) has two separate downstream
+paths, and they must not be conflated.
+
+Path A — citations: `chunk_text` flows into `MultiAgentAnswer.citations`
+unsanitized. Verified independently against the current code. In Block 6
 (`orchestrator.py`), all nine places `MultiAgentAnswer.answer` gets set
 were traced: five are hardcoded strings for failure modes, one builds an
 f-string purely from the Cohort agent's counts and the question's
@@ -62,26 +63,62 @@ Block 5 (`agent.py:51-83`, `_default_answer_fn` — the only place Block 5
 calls an LLM to produce this text), the prompt is built from exactly four
 inputs: the question's structured fields, a list of integer patient IDs,
 and two integer drug counts — it never receives `rag_citations` or any
-chunk/snippet content as an argument. So `chunk_text` does **not** reach
-an LLM prompt anywhere in Block 5 or Block 6's current code — it only
-ever reaches `MultiAgentAnswer.citations`, a separate field, never
-`.answer`. This is dormant today, not live. It becomes live the moment
-something — a future UI, or this project's own Block 8 capstone — reads
-citations back into a model or renders them raw.
+chunk/snippet content as an argument. So along this path, `chunk_text`
+does **not** reach an LLM prompt anywhere in Block 5 or Block 6's current
+code — it only ever reaches `MultiAgentAnswer.citations`, a field
+distinct from `.answer`.
 
-**Decision:** sanitize proactively in Block 7, not test-and-defer. A
-neutralization step is added where citations are constructed (before they
-enter `MultiAgentAnswer`), so Block 8 inherits an already-safe field
-instead of a live latent risk.
+Path B — Block 4's own generation call: `chunk_text` reaches a live LLM
+prompt today, on every answerable question, not a hypothetical or future
+one. Block 5's `search_patients` calls Block 4's `POST /query` on every
+question. Block 4's `generate_answer` (`generate.py:57-61`) builds its
+user message by interpolating `chunk['chunk_text']` directly into the
+prompt, and this is called unconditionally at `api.py:116` whenever any
+retrieved chunk clears the relevance threshold. This path was missed in
+an earlier draft of this section, which assessed the overall indirect-
+injection risk as dormant based only on tracing Blocks 5 and 6 — one repo
+short of where this exposure actually sits.
+
+Impact of Path B is genuinely limited: Block 5 only reads back
+`person_id`/`chunk_id`/`score`/`chunk_text` as structured `sources` from
+Block 4's response — it never consumes Block 4's own generated `answer`
+text — and `MultiAgentAnswer.answer` is written exclusively by Block 5's
+own `_default_answer_fn` (Path A above). So an injected instruction in a
+note has little leverage over what the end user actually reads. But Path
+B is live today, on every query, not dormant — the risk here is real even
+though its blast radius is small.
+
+Also found during this review: Block 4's `QueryRequest` (`api.py`) has no
+`max_length` on any of its four free-text fields (`question`,
+`condition`, `drug`, `lab`). Of these, only `question` reaches an LLM
+prompt directly — it's interpolated into `generate_answer`'s prompt
+alongside `chunk_text`, so it's the same surface as Path B above.
+`condition`, `drug`, and `lab` are used exclusively as Pinecone metadata
+filter values in `build_metadata_filter` (`retrieve.py`) and never reach
+an LLM prompt — capping them is a narrower input-hygiene measure (an
+oversized filter value), not a prompt-injection fix. All four still get
+a `max_length`, for two different reasons, not one.
+
+**Decision:** sanitize proactively, not test-and-defer, and close both
+paths, not just the one originally found. The primary fix moves to where
+the live exposure actually is: neutralize `chunk_text` either at
+ingestion into Pinecone or inside Block 4's `generate_answer` before its
+prompt is built — this brings `genai-block4-rag-eval` into Block 7's
+scope for this one fix, alongside a `max_length` cap on the four fields
+above. The Block 6 citation-sanitization step (Path A) is kept as a
+second layer protecting the rendering path, even though that path doesn't
+reach an LLM prompt today.
 
 **Target:** direct injection attempts are *flagged* — tests assert parsed
 tool arguments stay within expected domain/type/range (e.g. a parsed
 "condition" is a plausible clinical term, not an instruction fragment); any
 case where a jailbreak still produces a validly-typed argument must still
 surface in tracing, since type-validity alone doesn't prove the argument is
-legitimate. Indirect injection is *blocked* — the sanitization step strips
-or neutralizes control sequences and instruction-like patterns before they
-ever leave the field, proven two ways: a unit-level regression test on
+legitimate. Indirect injection is *blocked* on both paths: Block 4's
+`generate_answer` never receives unsanitized `chunk_text` (proven by a
+test asserting the constructed prompt is clean for a seed note containing
+an injection attempt), and `MultiAgentAnswer.citations` is separately
+sanitized and trimmed, proven two ways — a unit-level regression test on
 the sanitization function itself, and an end-to-end test that plants an
 injection attempt in a seed patient note and runs it through the real
 pipeline (Block 1's note generation, Block 3's storage, Block 4's
@@ -188,6 +225,32 @@ path can crash `run_multi_agent`. Proven by a test that forces the inner
 helper to raise and confirms the system still returns a valid answer
 instead of propagating the exception.
 
+### LLM08:2025 — Vector and Embedding Weaknesses
+
+Checked directly: Pinecone does support read-only API keys (the
+`DataPlaneViewer` role — query, fetch, list, and stats only, no write or
+delete), unlike Neo4j Community Edition, which has no such option at all.
+Block 4's actual key (named `default`) was checked in the Pinecone
+console and confirmed to carry the `All` role — full read and write
+access to the entire project, used by both the query path (`retrieve.py`,
+`api.py`) and the write path (`create_index.py`, `ingest.py`,
+`verify.py`). Also verified: no other repo holds or calls this key
+directly — Block 5 and Block 6 reach Pinecone exclusively through Block
+4's own API, so this gap is fully contained to Block 4.
+
+**Decision:** fix it directly rather than only documenting it. This is a
+real, cheaply fixable gap, not a structural limitation like the Neo4j
+one, and Block 4 is already in scope for this revision's LLM01 fix (see
+above), so the same phase carries this change too. Split the query and
+write paths onto separate keys: a `DataPlaneViewer`-scoped key for
+`retrieve.py`/`api.py`, and the existing full-access key retained only
+for `create_index.py`/`ingest.py`/`verify.py`.
+
+**Target:** *blocked* — the query path can no longer write or delete
+regardless of what code runs against it, proven by a test that attempts a
+write/delete call using the query-path key and asserts Pinecone itself
+rejects it, not just application logic.
+
 ### LLM10:2025 — Unbounded Consumption
 
 Two amplifiers.
@@ -243,29 +306,10 @@ the LLM01 indirect-injection surface above. This is a Block 3/4 ingestion
 concern, not a Block 5/6 runtime one; noted here so it isn't lost, not
 addressed in Block 7.
 
-**LLM08:2025 — Vector and Embedding Weaknesses.** Checked directly:
-Pinecone does support read-only API keys (the `DataPlaneViewer` role —
-query, fetch, list, and stats only, no write or delete), unlike Neo4j
-Community Edition, which has no such option at all. Block 4's actual key
-(named `default`) was checked in the Pinecone console and confirmed to
-carry the `All` role — full read and write access to the entire project,
-used by both the query path (`retrieve.py`, `api.py`) and the write path
-(`create_index.py`, `ingest.py`, `verify.py`). Also verified: no other
-repo holds or calls this key directly — Block 5 and Block 6 reach
-Pinecone exclusively through Block 4's own API, so this gap is fully
-contained to Block 4. This is a real, cheaply fixable gap, not a
-structural limitation like the Neo4j one — fixing it would mean splitting
-the query and write paths onto separate keys, a small code change, not a
-migration. Deliberately not addressed in Block 7: fixing it requires
-touching Block 4's code, which is out of scope for this block.
-
 ## 4. Explicitly out of scope for Block 7
 
 - Content-level validation at ingestion (LLM04, above) — corpus integrity
   is assumed upstream of Block 6.
-- Pinecone API key scoping (LLM08, above) — confirmed to be a real,
-  fixable gap, fully contained to Block 4, but fixing it requires a
-  Block 4 code change that's out of scope for this block.
 - Full DB-level RBAC implementation — documented and a migration path
   named, not implemented; Community Edition cannot do it, and an
   Enterprise/Aura migration is a decision beyond this curriculum block.
@@ -303,6 +347,9 @@ discoverable on inspection, not actively monitored.
 - Confirm the soft-alert threshold (LLM10, 500 patients or 25% of
   population) against the real total patient count in the graph — the
   default was chosen without knowing that number.
+- Create the new `DataPlaneViewer`-scoped Pinecone key (LLM08) in the
+  Pinecone console before implementation — a manual prerequisite, not a
+  code change itself.
 
 ## 7. Next step
 

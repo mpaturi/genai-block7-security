@@ -41,6 +41,14 @@ not Block 6's, even though Block 6 depends on them. Tests live with the
 code they test, same as Block 5 and Block 6's existing parameterization
 tests already do.
 
+**`genai-block4-rag-eval`**: chunk-text sanitization before it reaches
+`generate_answer`'s prompt (LLM01 Path B), a `max_length` cap on
+`QueryRequest`'s four free-text fields (found during the same review),
+and splitting the Pinecone API key into a query-scoped and a write-scoped
+key (LLM08). Block 4 wasn't previously in Block 7's footprint; it enters
+now because this is where the live indirect-injection exposure and the
+key-scoping gap actually live, not because scope grew for its own sake.
+
 ## 3. Phases
 
 Each phase is one branch, one focused PR, per house rules. Phase numbers
@@ -61,6 +69,25 @@ Block 6's actual Phase 8 code first). Proves itself with tests that
 simulate a transient failure and assert the wait grows between attempts
 and the system gives up instead of retrying forever. Satisfies LLM10's
 "retry gap: blocked" target.
+
+**Block 4 — chunk sanitization and key scoping.** Neutralizes `chunk_text`
+before it reaches `generate_answer`'s prompt (`generate.py`) — either at
+ingestion into Pinecone or immediately before the prompt is built,
+decided at this phase's start — and adds a `max_length` cap to
+`QueryRequest`'s four free-text fields (`question`, `condition`, `drug`,
+`lab`). Also splits Block 4's Pinecone API key: a new
+`DataPlaneViewer`-scoped key for the query path (`retrieve.py`,
+`api.py`), the existing full-access key kept only for the write path
+(`create_index.py`, `ingest.py`, `verify.py`) — the new key created
+manually in the Pinecone console first, per the spec's open follow-up.
+Proves itself three ways: a test asserting the prompt Block 4 builds is
+clean for a seed note containing a planted injection attempt, a test
+asserting an over-length field is rejected, and a test attempting a
+write/delete call with the new query-scoped key that asserts Pinecone
+itself rejects it. Satisfies LLM01's Path B closure and LLM08's "blocked"
+target. Landed before the direct-injection suite and citation-hardening
+phases below, since both write tests that model the surface this phase
+changes.
 
 **Block 5 — direct-injection test suite.** Feeds Block 5's query-parsing
 step adversarial inputs (jailbreak attempts, requests to reveal the system
@@ -128,9 +155,13 @@ pointing at the test that proves its blocked/flagged claim.
 ## 4. Suggested order
 
 Retry hardening (Block 5) first — it's porting an already-working pattern,
-lowest risk, fastest. The dependency pin bump (Block 6) comes right after,
-since it only makes sense once retry hardening has actually merged. After
-that, the remaining three phases — citation hardening, state validation,
+lowest risk, fastest. Chunk sanitization and key scoping (Block 4) comes
+next, ahead of any phase that writes tests against the injection/input
+surface, since it changes what those tests need to model — the
+direct-injection suite and citation-hardening phases below both depend on
+this ordering, per review feedback. The dependency pin bump (Block 6) can
+land any time after retry hardening merges — it doesn't depend on Block 4.
+After that, the remaining phases — citation hardening, state validation,
 and the Cohort agent injection test with query-size visibility, all in
 Block 6 — plus the direct-injection suite in Block 5, can happen in any
 order relative to each other; they touch different code paths and don't
@@ -142,3 +173,6 @@ has merged.
 The RBAC migration recommendation and the supply-chain pinning policy are
 both pure documentation — no code changes back them, so they're written
 directly into SECURITY.md rather than getting a phase of their own.
+Deciding whether Block 4's chunk sanitization happens at ingestion or at
+prompt-build time is a small decision made at that phase's start, same as
+the other in-phase decisions above.
