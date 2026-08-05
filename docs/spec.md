@@ -47,10 +47,18 @@ into structured tool arguments. `QuestionInput`'s `condition`, `lab`,
 already structured. `block5_agent/schemas.py`'s `build_rag_query()` and
 `assemble_question_text()` f-string these values directly into the
 Pinecone search text and into the `"Question: ..."` line inside
-`_default_answer_fn`'s prompt to Claude (`agent.py`) — unsanitized beyond
-field length. So whatever a caller puts in `condition`/`lab`/`drug_a`/
-`drug_b` reaches an LLM prompt verbatim, via direct string interpolation,
-not model-mediated parsing. This path is untested against injected
+`_default_answer_fn`'s prompt to Claude (`agent.py`). `QuestionInput`
+(`block5_agent/schemas.py`) now bounds these fields —
+`condition` at `max_length=200`, `lab`/`drug_a`/`drug_b` at
+`max_length=100`, and `value` at `ge=0, le=10_000` (also rejecting
+`inf`/`-inf`/`nan`, which otherwise crash the response renderer entirely —
+see LLM10 below). These bounds close two narrower risks — oversized
+payloads and non-finite numeric input — but are not content-level
+injection filtering: a value well within 200 characters and still
+entirely instruction-like text passes through unchanged. So whatever a
+caller puts in `condition`/`lab`/`drug_a`/`drug_b`, within these bounds,
+still reaches an LLM prompt verbatim, via direct string interpolation,
+not model-mediated parsing. This path remains untested against injected
 content today — e.g. instruction-like text placed in `condition`, or
 attempts to make the assembled question text read as a new instruction
 rather than a clinical term. This is a live, caller-controlled surface,
@@ -63,7 +71,7 @@ paths, and they must not be conflated.
 Path A — citations: `chunk_text` flows into `MultiAgentAnswer.citations`
 unsanitized. Verified independently against the current code. In Block 6
 (`orchestrator.py`), all nine places `MultiAgentAnswer.answer` gets set
-were traced: five are hardcoded strings for failure modes, one builds an
+were traced: four are hardcoded strings for failure modes, one builds an
 f-string purely from the Cohort agent's counts and the question's
 structured fields (Role 2 has no note-text field to draw from), and the
 remaining four copy `clinical_result.answer` verbatim from Block 5. In
@@ -135,13 +143,26 @@ retrieval, Block 6's citation construction) to confirm it's neutralized by
 the time it reaches `MultiAgentAnswer.citations`. The end-to-end version
 is the stronger proof — it tests the real system end to end, not an
 isolated function, and is only possible because the corpus is fully
-controlled. `MultiAgentAnswer.answer`/`.caveat` (Block 5's own
-answer-writing LLM output, sourced from `ClinicalAnswer.answer`/`.caveat`)
-get the same structural sanitization Block 6 applies to citations,
-applied at every point they're assigned into a `MultiAgentAnswer` — this
-free text is exactly as unverified as a citation snippet, and is in fact
-the more direct surface for a successfully-steered injection to reach a
-caller, since it's Claude's own generated words, not a retrieved excerpt.
+controlled. `MultiAgentAnswer.answer`/`.caveat` get the same structural
+sanitization Block 6 applies to citations, applied at every point they're
+assigned into a `MultiAgentAnswer` — verified by enumerating all nine
+`.answer`-construction sites in `orchestrator.py`: four hardcoded failure
+strings (safe, no caller or model input), four that copy already-sanitized
+text from Block 5's `ClinicalAnswer.answer`/`.caveat`, and
+`_cohort_only_degraded_answer`, which f-strings the question's own
+caller-supplied fields (`condition`/`lab`/`comparison`/`value`/`drug_a`/
+`drug_b`) into the degraded-mode message with no LLM involved at all.
+This last site was found unsanitized during this review — it fell
+outside the original fix's LLM-steering framing, since no model call
+happens on this path — and is now wrapped in the same
+`sanitize_citation_text` call as every other site. This free text is
+exactly as unverified as a citation snippet; for the four Block-5-sourced
+sites it's in fact the more direct surface for a successfully-steered
+injection to reach a caller, since it's Claude's own generated words, not
+a retrieved excerpt. The cohort-only-degraded site is a different case —
+caller input echoed straight back with no model in the loop — but gets
+the same defense regardless, since it's the same class of unverified free
+text reaching the same caller-facing field.
 
 **Assumption this relies on:** Block 5's `run_agent` is never called
 directly by anything that hands its raw, unsanitized
@@ -329,6 +350,21 @@ only after both branches have already returned (past Block 6's own 150s
 branch-level timeout), a wedged Neo4j at exactly this point hangs
 indefinitely with no outer bound in this repo. Block 8 added its own
 180s caller-side timeout as a mitigation, but the actual gap is here.
+
+A related but distinct availability gap, found and fixed during this
+review: `QuestionInput.value`/`QueryRequest.value` accepted any float,
+including `inf`/`-inf`/`nan`. Beyond the missing domain bound itself,
+rejecting an out-of-range value the normal way exposed a second,
+independent bug — FastAPI/Starlette's default `RequestValidationError`
+handler embeds the raw rejected value back into the 422 response body,
+and `JSONResponse.render()` calls `json.dumps(..., allow_nan=False)`,
+which raises on a non-finite float and turns a should-be-422 into an
+unhandled 500. Fixed in Block 4 and Block 8 (Block 5 and Block 6 have no
+HTTP layer of their own for this to crash) with a `ge=0, le=10_000` bound
+on `value` plus a custom `RequestValidationError` handler that stringifies
+the error instead of re-encoding the raw rejected value. Noted here
+rather than under LLM01 because the actual failure mode is availability —
+an unhandled crash — not content injection.
 
 **Decision:** retry/backoff hardening for Block 5 is in scope for Block 7,
 closing the inconsistency against the standard Block 6 Phase 8 already
