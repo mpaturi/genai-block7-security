@@ -146,7 +146,7 @@ checks against the system's own data, not an external medical vocabulary
 
 ### LLM02:2025 — Sensitive Information Disclosure
 
-Two layers.
+Three layers.
 
 Data-layer access control: Neo4j Community Edition has zero RBAC support
 (confirmed directly — `SHOW ROLES` fails outright). Application-level
@@ -159,16 +159,41 @@ Field-layer over-exposure: citations currently return `chunk_text`
 verbatim, which may carry more patient note content than an answer
 requires — a data-minimization gap independent of prompt injection.
 
+Network/API-layer access control: neither Block 4's `POST /query` nor
+Block 8's own API has any authentication or access control — confirmed
+directly against `scripts/api.py` and `app/api.py`, neither has an auth
+dependency, API key check, or middleware of any kind. Block 4's own
+`docs/spec.md` already lists this under Scope as a conscious exclusion;
+Block 8's does not mention it at all. Today this is contained, not
+exploitable over a network: `genai-block8-capstone/docker-compose.yml`
+binds every service — Neo4j, the RAG service, the app — to `127.0.0.1`
+only, never `0.0.0.0`, and Block 4's own documented run command
+(`uvicorn scripts.api:app --reload`) defaults to the same loopback-only
+bind. The gap is real at the code level, but the deployment as actually
+configured is the only thing standing between it and being reachable —
+redeploying with different port bindings (a real cloud host, a container
+orchestrator that exposes ports by default) would expose it immediately,
+with no code-level change required to trigger that.
+
 **Decision:** accept the RBAC gap explicitly as a documented residual risk
 — it cannot be structurally fixed on Community Edition — **and** name a
 concrete migration path (Neo4j Enterprise or Aura with a scoped read-only
 role) as explicit future work, rather than re-flagging the same gap with
-no path forward.
+no path forward. Accept the network/API-layer gap the same way — name a
+concrete path (an API key dependency on both FastAPI apps via `Depends()`,
+or auth terminated at a reverse proxy in front of both services) as
+explicit future work, rather than leaving it undocumented, which is the
+actual gap being closed here — the missing auth itself is unchanged by
+this phase, only its documentation is.
 
-**Target:** the RBAC gap is *flagged/documented*, not blocked, in this
-block. Field-layer over-exposure is *blocked* — citation payloads are
-trimmed to what the answer actually needs, built alongside the
-sanitization work in LLM01 above (same code path).
+**Target:** the RBAC gap and the network/API-layer gap are both
+*flagged/documented*, not blocked, in this block — neither is something a
+runtime test can close, and the network-layer gap specifically is
+mitigated by deployment configuration, not application code, so no
+application-level test could prove it either way. Field-layer
+over-exposure is *blocked* — citation payloads are trimmed to what the
+answer actually needs, built alongside the sanitization work in LLM01
+above (same code path).
 
 **Trimming rule:** split `chunk_text` into sentences; keep only the
 sentences that contain at least one of the parsed query terms (the

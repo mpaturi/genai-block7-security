@@ -163,8 +163,10 @@ PR rather than folded into another phase.
 
 **Block 7 — SECURITY.md.** Written last, after the phases above land,
 because it documents what's actually true and tested, not what's planned.
-Covers: the RBAC gap and the named Enterprise/Aura migration path (LLM02),
-the cross-repo pinning policy (LLM03), and a short status line per risk
+Covers: the RBAC gap and the named Enterprise/Aura migration path, and the
+network/API-layer auth gap and its named migration path (an API key
+dependency on both FastAPI apps, or auth at a reverse proxy) — both LLM02
+— the cross-repo pinning policy (LLM03), and a short status line per risk
 pointing at the test that proves its blocked/flagged claim.
 
 ## 4. Suggested order
