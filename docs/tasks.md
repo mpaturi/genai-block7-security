@@ -158,7 +158,10 @@ house rules.
 2. Verify: is `MultiAgentState` still the mutable `TypedDict` the spec
    describes, passed between the same nodes, and does
    `reconcile_node_safe` still call `_reconcile_error_answer` unguarded
-   inside its except block, the way this spec now describes?
+   inside its except block, the way this spec now describes? Also
+   confirm `scripts/vocabulary_check.py`'s `_fetch_known_vocabulary()`
+   still issues its two `session.run()` calls with no `timeout=`, unlike
+   `cohort_tool.py`'s other queries.
 3. Add schema/type validation at each node boundary where state gets
    written.
 4. On a failed validation, log a clear warning and mark the entry as
@@ -166,14 +169,22 @@ house rules.
 5. Wrap `reconcile_node_safe`'s call to `_reconcile_error_answer` in its
    own try/except, falling back to a fixed literal `MultiAgentAnswer`
    with no computed fields if that helper itself raises.
-6. Write a test that deliberately writes a malformed value at a node
+6. Add a `timeout=` parameter to both `session.run()` calls in
+   `_fetch_known_vocabulary()` (`scripts/vocabulary_check.py`), matching
+   `cohort_tool.py`'s `GRAPH_QUERY_TIMEOUT` pattern/value. Small,
+   single-purpose fix — no other logic change.
+7. Write a test that deliberately writes a malformed value at a node
    boundary and confirms it's caught and logged, not trusted.
-7. Write a second test that forces `_reconcile_error_answer` to raise and
+8. Write a second test that forces `_reconcile_error_answer` to raise and
    confirms the system still returns a valid answer instead of the
    exception escaping.
-8. Commit the state validation and the reconciliation error-handling fix
-   as separate commits — two different concerns sharing one phase.
-9. Push, open PR against `main`.
+9. Write a third test proving the new vocabulary-check timeout against
+   real behavior — a genuinely slow/blocked query should now surface as
+   a timeout error, not hang. Don't just verify from the diff.
+10. Commit the state validation, the reconciliation error-handling fix,
+    and the vocabulary-check timeout fix as separate commits — three
+    different concerns sharing one phase.
+11. Push, open PR against `main`.
 
 ## Phase: Block 6 — Cohort agent injection test and query-size visibility
 

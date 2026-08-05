@@ -123,12 +123,19 @@ logged instead of silently reaching reconciliation. Also wraps
 try/except, falling back to a fixed literal `MultiAgentAnswer` if that
 helper itself fails, so nothing in the reconciliation error path can
 crash `run_multi_agent` — found during review, folded into this same
-phase since it's the same file and the same risk category. Proves
-itself with two tests: one that deliberately writes a bad value at a node
-boundary and confirms it's caught, and one that forces
-`_reconcile_error_answer` to raise and confirms the system still returns
-a valid answer instead of crashing. Satisfies LLM06's "state tampering:
-flagged" and "reconciliation error-handling gap: blocked" targets.
+phase since it's the same file and the same risk category. Also adds a
+`timeout=` to `vocabulary_check.py`'s two unbounded `session.run()` calls
+(found during Block 8's PR review — see spec's LLM10 section), folded in
+here since `get_known_vocabulary()` is called from `reconcile_node` and
+the fix is in the same reconciliation-robustness spirit as the other two
+items in this phase. Proves itself with three tests: one that
+deliberately writes a bad value at a node boundary and confirms it's
+caught, one that forces `_reconcile_error_answer` to raise and confirms
+the system still returns a valid answer instead of crashing, and one that
+confirms a genuinely slow vocabulary query now surfaces as a timeout
+error instead of hanging. Satisfies LLM06's "state tampering: flagged"
+and "reconciliation error-handling gap: blocked" targets, plus LLM10's
+newly added "unbounded vocabulary-check query: blocked" target.
 
 **Block 6 — Cohort agent injection test and query-size visibility.** Adds
 a dedicated Cypher-injection test for the Cohort agent's query, matching

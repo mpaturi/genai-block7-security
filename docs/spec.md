@@ -275,18 +275,37 @@ undercounting gap). Correct for correctness, but it also means a
 pathological or adversarial query (a condition matching a large fraction
 of the graph) has no cap on result size or compute cost.
 
+An unbounded Cypher call (found during Block 8's PR review, verified
+directly against the code): `scripts/vocabulary_check.py`'s
+`_fetch_known_vocabulary()` — called via `reconcile_node`'s
+`get_known_vocabulary()` in `orchestrator.py` — issues its two queries
+with a plain `session.run()`, unlike every other query in this repo
+(`cohort_tool.py`'s `query_full_cohort`/`count_drugs_exhaustive`), which
+wrap their calls in `Query(..., timeout=...)`. Since `reconcile_node` runs
+only after both branches have already returned (past Block 6's own 150s
+branch-level timeout), a wedged Neo4j at exactly this point hangs
+indefinitely with no outer bound in this repo. Block 8 added its own
+180s caller-side timeout as a mitigation, but the actual gap is here.
+
 **Decision:** retry/backoff hardening for Block 5 is in scope for Block 7,
 closing the inconsistency against the standard Block 6 Phase 8 already
-established.
+established. The unbounded vocabulary-check query is also in scope —
+same fix pattern (`Query(..., timeout=...)`) already used everywhere else
+in `cohort_tool.py`, just not yet applied to this one call site.
 
 **Target:** the retry gap is *blocked* — Block 5's retry logic is brought
 up to Block 6 Phase 8's standard (exponential backoff, exception
 classification), verified by tests that simulate transient failures and
-assert retry timing/count. The exhaustive-query cost risk is *flagged*, not
-capped — a hard limit would reintroduce the undercounting problem this
-agent exists to solve, so instead result size/cost is logged with a
-configurable soft-alert threshold, making an anomalously large result set
-visible in tracing rather than silent.
+assert retry timing/count. The unbounded vocabulary-check query is also
+*blocked* — a `timeout=` is added to both `session.run()` calls in
+`_fetch_known_vocabulary()`, matching `cohort_tool.py`'s existing
+`GRAPH_QUERY_TIMEOUT` pattern/value, verified against a genuinely slow
+query surfacing as a timeout error rather than hanging. The
+exhaustive-query cost risk is *flagged*, not capped — a hard limit would
+reintroduce the undercounting problem this agent exists to solve, so
+instead result size/cost is logged with a configurable soft-alert
+threshold, making an anomalously large result set visible in tracing
+rather than silent.
 
 **Retry policy (confirmed against Block 6's actual Phase 8 code —
 `cohort_agent.py`'s `_MAX_TOOL_RETRIES`/`_RETRY_BACKOFF_SECONDS`):** up to
@@ -350,15 +369,22 @@ discoverable on inspection, not actively monitored.
 
 ## 6. Open follow-ups
 
-- Confirm citation field-minimization (LLM02, field layer) doesn't break
-  Block 4's existing eval harness assertions on citation content — those
-  tests may currently assert on full `chunk_text`.
+- ~~Confirm citation field-minimization (LLM02, field layer) doesn't
+  break Block 4's existing eval harness assertions on citation
+  content~~ — resolved in Block 6's citation-hardening phase: the full
+  eval harness was re-run after trimming landed (9/9 recall, no
+  regression, no broken citation assertions).
 - Confirm the soft-alert threshold (LLM10, 500 patients or 25% of
-  population) against the real total patient count in the graph — the
-  default was chosen without knowing that number.
-- Create the new `DataPlaneViewer`-scoped Pinecone key (LLM08) in the
-  Pinecone console before implementation — a manual prerequisite, not a
-  code change itself.
+  population) against the real total patient count in the graph — still
+  open. Block 6's Cohort agent phase implemented the threshold with an
+  explicit placeholder (`_ASSUMED_TOTAL_PATIENT_POPULATION = 10_000`,
+  documented as a default to tune, not a confirmed number — the largest
+  cohort seen in eval so far is 99 patients).
+- ~~Create the new `DataPlaneViewer`-scoped Pinecone key (LLM08) in the
+  Pinecone console~~ — resolved: the scoped key has been created and
+  `tests/test_pinecone_key_scope.py` has been run against it directly
+  (not just present in the suite — it skips itself without live
+  credentials), confirming LLM08's "blocked" target for real.
 
 ## 7. Next step
 
