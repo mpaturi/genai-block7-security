@@ -135,7 +135,25 @@ retrieval, Block 6's citation construction) to confirm it's neutralized by
 the time it reaches `MultiAgentAnswer.citations`. The end-to-end version
 is the stronger proof — it tests the real system end to end, not an
 isolated function, and is only possible because the corpus is fully
-controlled.
+controlled. `MultiAgentAnswer.answer`/`.caveat` (Block 5's own
+answer-writing LLM output, sourced from `ClinicalAnswer.answer`/`.caveat`)
+get the same structural sanitization Block 6 applies to citations,
+applied at every point they're assigned into a `MultiAgentAnswer` — this
+free text is exactly as unverified as a citation snippet, and is in fact
+the more direct surface for a successfully-steered injection to reach a
+caller, since it's Claude's own generated words, not a retrieved excerpt.
+
+**Assumption this relies on:** Block 5's `run_agent` is never called
+directly by anything that hands its raw, unsanitized
+`ClinicalAnswer.answer`/`.caveat` straight to a caller — confirmed against
+the real code, not assumed: `genai-block8-capstone/app/api.py` only
+imports `QuestionInput` from `block5_agent`, never `run_agent` itself, and
+reaches Block 5 exclusively through `run_multi_agent_async`
+(`scripts/orchestrator.py`), the one place this sanitization runs. No
+other file in Block 8 calls `run_agent` at all (checked directly). If a
+future caller ever invokes Block 5's agent standalone, bypassing Block 6,
+this sanitization would not apply — that caller would need its own layer,
+not something to retrofit into Block 5 preemptively today.
 
 **Plausibility rule:** check the caller-supplied condition, lab name, and
 drug names against the actual set of values present in the Neo4j graph
