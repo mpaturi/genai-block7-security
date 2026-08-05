@@ -89,13 +89,17 @@ target. Landed before the direct-injection suite and citation-hardening
 phases below, since both write tests that model the surface this phase
 changes.
 
-**Block 5 — direct-injection test suite.** Feeds Block 5's query-parsing
-step adversarial inputs (jailbreak attempts, requests to reveal the system
-prompt, attempts to steer parsed arguments) and asserts the parsed output
-against the plausibility rule defined in the spec's LLM01 section
-(checked against real values in the Neo4j graph, not an external
-vocabulary), with anything that fails surfaced in tracing. Satisfies
-LLM01's "direct injection: flagged" target — this is
+**Block 5 — direct-injection test suite.** Corrected during review: there
+is no natural-language-parsing step anywhere in this system to test —
+`QuestionInput`'s `condition`/`lab`/`drug_a`/`drug_b` are caller-supplied
+free-text fields that `block5_agent/schemas.py`'s `build_rag_query()` and
+`assemble_question_text()` f-string directly into the RAG search text and
+Block 5's LLM prompt. This phase feeds those fields adversarial values
+(instruction-like text, attempts to make the assembled question read as a
+new instruction) and asserts them against the plausibility rule defined
+in the spec's LLM01 section (checked against real values in the Neo4j
+graph, not an external vocabulary), with anything that fails surfaced in
+tracing. Satisfies LLM01's "direct injection: flagged" target — this is
 also the piece that most literally satisfies the block's acceptance
 criterion of showing prompt-injection attempts get blocked or flagged.
 

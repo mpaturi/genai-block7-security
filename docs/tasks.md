@@ -98,14 +98,20 @@ house rules.
 ## Phase: Block 5 — direct-injection test suite
 
 1. Branch off `main` in `genai-block5-agent`.
-2. Verify: does the query-parsing step still take a raw natural-language
-   question and return the same structured fields the spec describes?
-3. Write adversarial test cases: instruction-override attempts ("ignore
-   prior instructions..."), attempts to extract the system prompt,
-   attempts to steer parsed fields toward attacker-chosen values.
-4. For each test case, assert the parsed output against the plausibility
-   rule in the spec's LLM01 section (query the Neo4j graph once for its
-   real condition/lab/drug values, cache them, check parsed values
+2. Verify: do `build_rag_query()` and `assemble_question_text()`
+   (`block5_agent/schemas.py`) still f-string `condition`/`lab`/
+   `drug_a`/`drug_b` directly into the RAG search text and the
+   `"Question: ..."` line inside `_default_answer_fn`'s prompt
+   (`agent.py`)? Confirm no natural-language-parsing step has been added
+   anywhere that would change this surface. Apply the verification rule
+   above if anything's changed structurally.
+3. Write adversarial test cases: instruction-like text placed directly in
+   `condition`/`lab`/`drug_a`/`drug_b` (e.g. "ignore prior instructions"),
+   attempts to make the assembled question text read as a new instruction
+   rather than a clinical term.
+4. For each test case, assert the value against the plausibility rule in
+   the spec's LLM01 section (query the Neo4j graph once for its real
+   condition/lab/drug values, cache them, check the supplied value
    against that list), and that anything that fails gets surfaced in
    tracing rather than silently accepted.
 5. Run the suite, confirm results match what the spec commits to

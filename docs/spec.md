@@ -40,14 +40,22 @@ away, and is not addressed by Block 7.
 
 Two surfaces exist here and must not be conflated.
 
-Direct: the user's natural-language question ("of patients with [condition]
-and [lab] [comparison] [value], how many are on [drug_a] vs [drug_b]?") is
-parsed by Block 5's agent LLM into structured tool arguments before any
-parameterization defense applies. This path is untested against injected
-instructions today — e.g. "ignore prior instructions," attempts to steer
-the model into calling tools with attacker-chosen values, or attempts to
-get the model to reveal its system prompt. This is a live, user-controlled
-surface, not a hypothetical one.
+Direct: corrected during this review — there is no natural-language
+question anywhere in this system, and no LLM anywhere parses free text
+into structured tool arguments. `QuestionInput`'s `condition`, `lab`,
+`drug_a`, and `drug_b` fields are free-text strings a caller supplies
+already structured. `block5_agent/schemas.py`'s `build_rag_query()` and
+`assemble_question_text()` f-string these values directly into the
+Pinecone search text and into the `"Question: ..."` line inside
+`_default_answer_fn`'s prompt to Claude (`agent.py`) — unsanitized beyond
+field length. So whatever a caller puts in `condition`/`lab`/`drug_a`/
+`drug_b` reaches an LLM prompt verbatim, via direct string interpolation,
+not model-mediated parsing. This path is untested against injected
+content today — e.g. instruction-like text placed in `condition`, or
+attempts to make the assembled question text read as a new instruction
+rather than a clinical term. This is a live, caller-controlled surface,
+not a hypothetical one — the earlier framing of this as an LLM-parsing
+step described a flow that doesn't exist anywhere in Blocks 5, 6, or 8.
 
 Indirect: raw patient note text (`chunk_text`) has two separate downstream
 paths, and they must not be conflated.
@@ -109,11 +117,12 @@ above. The Block 6 citation-sanitization step (Path A) is kept as a
 second layer protecting the rendering path, even though that path doesn't
 reach an LLM prompt today.
 
-**Target:** direct injection attempts are *flagged* — tests assert parsed
-tool arguments stay within expected domain/type/range (e.g. a parsed
-"condition" is a plausible clinical term, not an instruction fragment); any
-case where a jailbreak still produces a validly-typed argument must still
-surface in tracing, since type-validity alone doesn't prove the argument is
+**Target:** direct injection attempts are *flagged* — tests assert the
+caller-supplied `condition`/`lab`/`drug_a`/`drug_b` values stay within
+expected domain (e.g. `condition` is a plausible clinical term, not an
+instruction fragment); a value that's validly-typed and within length
+limits but still implausible as a real clinical term must still surface
+in tracing, since type-validity and length alone don't prove a value is
 legitimate. Indirect injection is *blocked* on both paths: Block 4's
 `generate_answer` never receives unsanitized `chunk_text` (proven by a
 test asserting the constructed prompt is clean for a seed note containing
@@ -128,12 +137,12 @@ is the stronger proof — it tests the real system end to end, not an
 isolated function, and is only possible because the corpus is fully
 controlled.
 
-**Plausibility rule:** after parsing, check the condition, lab name, and
+**Plausibility rule:** check the caller-supplied condition, lab name, and
 drug names against the actual set of values present in the Neo4j graph
-(queried once and cached, not re-queried per request). A parsed value
-that doesn't match anything in that real list gets flagged as suspicious.
-This checks against your own data, not an external medical vocabulary —
-simpler, and more accurate for this specific dataset.
+(queried once and cached, not re-queried per request). A value that
+doesn't match anything in that real list gets flagged as suspicious. This
+checks against the system's own data, not an external medical vocabulary
+— simpler, and more accurate for this specific dataset.
 
 ### LLM02:2025 — Sensitive Information Disclosure
 
