@@ -346,7 +346,9 @@ rejects it, not just application logic.
 
 ### LLM10:2025 — Unbounded Consumption
 
-Two amplifiers.
+Four amplifiers, plus one related-but-distinct availability gap (a crash
+on rejection, not a resource-consumption amplifier — grouped here for the
+shared failure theme, not because it drives cost or compute).
 
 Block 5's zero-delay retries (known, already-disclosed gap): any transient
 failure — LLM rate limit, Neo4j timeout — retries immediately and
