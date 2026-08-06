@@ -66,7 +66,40 @@ cross-repo pin, all four now commit-pinned, none floating:
 - `genai-block8-capstone/docker/block4.Dockerfile`'s `BLOCK4_COMMIT`
   build arg — fixed commit.
 
-## 4. Risk status
+## 4. Dependency vulnerability scanning
+
+Pinning (§3) protects reproducibility and review-gating — it does not
+protect against a pinned version carrying a known, disclosed
+vulnerability. No repo in this project has a Dependabot configuration or
+an equivalent `pip-audit`/`safety` CI step (confirmed directly — none of
+the five repos' `.github/workflows` directories contain one). A pin can
+be fully compliant with §3's policy and still silently carry a CVE
+indefinitely, since nothing would ever surface it.
+
+**Mitigation path:** GitHub's own Dependabot (minimal setup, opens a PR
+automatically on a disclosed CVE in a pinned dependency) in each of the
+five repos, or an equivalent `pip-audit` CI step. Not scheduled — named
+as explicit future work.
+
+## 5. Request-volume rate limiting
+
+Neither Block 4's `POST /query` nor Block 8's own API has any rate
+limiting or request throttling (confirmed directly against
+`scripts/api.py` and `app/api.py` — no middleware, no per-client or
+per-IP request cap). Every request triggers a real Anthropic call and a
+real Neo4j/Pinecone round trip; nothing bounds how many requests a single
+caller can send concurrently — the most basic form of unbounded
+consumption there is, and unlike the other LLM10 amplifiers, not specific
+to any one code path.
+
+**Mitigation path:** an API-layer rate limiter (e.g. `slowapi` for
+FastAPI) keyed on client IP in the absence of any authentication layer —
+this gap compounds with §2's, since no auth means no natural per-caller
+identity to rate-limit against beyond IP — or throttling enforced at a
+reverse proxy/API gateway in front of both services. Not scheduled,
+contingent on the same auth-layer decision as §2.
+
+## 6. Risk status
 
 One line per primary risk from `docs/spec.md` §2, each pointing at the
 specific test proving its blocked/flagged claim.
@@ -115,9 +148,11 @@ specific test proving its blocked/flagged claim.
 
 **LLM03 — Supply Chain**
 
-*Flagged*, not blocked — a practice, not something a runtime test
-catches. See §3 above for the policy statement and current compliance
-status across all four cross-repo pins.
+- Cross-repo pinning policy: *flagged*, not blocked — a practice, not
+  something a runtime test catches. See §3 above for the policy statement
+  and current compliance status across all four cross-repo pins.
+- Dependency vulnerability scanning: *flagged/documented*, not
+  implemented — see §4 above.
 
 **LLM06 — Excessive Agency**
 
@@ -139,16 +174,14 @@ status across all four cross-repo pins.
 
 **LLM08 — Vector and Embedding Weaknesses**
 
-Query/write path key separation: *blocked* in code — the query-path
-Pinecone key can no longer write or delete regardless of what code runs
-against it, proven by
-`genai-block4-rag-eval/tests/test_pinecone_key_scope.py`'s
-`test_query_scoped_key_cannot_upsert` and
-`test_query_scoped_key_cannot_delete` (live-credential tests, skipped
-without them). One operational step remains outside code: the actual
-`PINECONE_QUERY_API_KEY` (`DataPlaneViewer`, query-only) still needs
-creating in the Pinecone console and setting in `.env` — this phase wired
-the code to expect and enforce a scoped key, not created the key itself.
+Query/write path key separation: *blocked* — the query-path Pinecone key
+can no longer write or delete regardless of what code runs against it.
+The `DataPlaneViewer`-scoped key has been created in the Pinecone console
+and set in `.env`; `genai-block4-rag-eval/tests/test_pinecone_key_scope.py`'s
+`test_query_scoped_key_cannot_upsert` and `test_query_scoped_key_cannot_delete`
+have been run against it directly (not just present in the suite, skipped
+without live credentials) — the "blocked" claim is proven for real, not
+just wired to be provable later (`docs/spec.md` §6).
 
 **LLM10 — Unbounded Consumption**
 
@@ -169,10 +202,17 @@ the code to expect and enforce a scoped key, not created the key itself.
   logging tests
   (`test_query_full_cohort_warns_when_result_exceeds_the_soft_alert_patient_threshold`,
   `test_count_drugs_exhaustive_warns_when_cohort_size_exceeds_the_soft_alert_threshold`,
-  `test_slow_query_logs_a_runtime_soft_alert`).
+  `test_slow_query_logs_a_runtime_soft_alert`). The threshold itself (500
+  patients or 25% of population, whichever is smaller) is still an
+  unconfirmed placeholder, not a validated number — it hasn't been
+  checked against the real total patient count in the graph (`docs/spec.md`
+  §6, still open). The mechanism is proven; the specific number isn't
+  final.
 - Non-finite float (`inf`/`nan`) crash on rejection: *blocked*, in both
   repos that have their own HTTP layer.
   `genai-block4-rag-eval/tests/test_api.py::test_value_infinity_returns_422`
   and `test_value_nan_returns_422`; identically,
   `genai-block8-capstone/tests/test_api.py::test_query_rejects_infinity_value`
   and `test_query_rejects_nan_value`.
+- Request-volume rate limiting: *flagged/documented*, not implemented —
+  see §5 above.

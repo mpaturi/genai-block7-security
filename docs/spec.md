@@ -244,19 +244,39 @@ re-ranking — consistent with keeping the code readable.
 
 ### LLM03:2025 — Supply Chain
 
-Block 6's `requirements.txt` pins its dependency on Block 5 to a specific
-git branch reference rather than a versioned package release — a
-cross-repo dependency pattern inherent to this project's one-repo-per-block
-structure. Any time that pin is updated to point at a different commit or
-branch, Block 6 silently inherits whatever code is at that reference, with
-none of the review gate a published library version would normally have.
+Found during this review, now fixed: Block 6's `requirements.txt` pinned
+its dependency on Block 5 to a specific git branch reference (`@main`)
+rather than a reviewed commit — a cross-repo dependency pattern inherent
+to this project's one-repo-per-block structure. Any time that pin
+updated, Block 6 would silently inherit whatever code was at that
+reference, with none of the review gate a published library version
+would normally have. Now a fixed commit, matching the same policy already
+followed by every other cross-repo pin in this project (Block 8's pins on
+Blocks 4/5/6).
 
-**Target:** *flagged*, not blocked — this isn't something a runtime test
-can catch, it's a practice to hold to. Block 7 states the policy plainly in
-SECURITY.md: cross-repo pins must always reference reviewed, merged
-commits or tags on `main`, never an active working branch, and any change
-to a pin goes through the same phase-branch/PR process as any other code
-change.
+A related, distinct gap, not yet named anywhere in this project: pinning
+protects reproducibility and review-gating (the fix above), but nothing
+scans a pinned version — cross-repo or third-party (PyPI) — for known
+vulnerabilities after it's pinned. Confirmed directly: none of this
+project's five repos has a Dependabot configuration or an equivalent
+`pip-audit`/`safety` CI step. A pin can be perfectly compliant with the
+policy above and still silently carry a disclosed CVE indefinitely, since
+nothing would ever surface it.
+
+**Target:** the pinning policy itself is *flagged*, not blocked — this
+isn't something a runtime test can catch, it's a practice to hold to.
+Block 7 states the policy plainly in SECURITY.md: cross-repo pins must
+always reference reviewed, merged commits or tags on `main`, never an
+active working branch, and any change to a pin goes through the same
+phase-branch/PR process as any other code change — now actually followed
+across every pin in this project, not just stated. Dependency
+vulnerability scanning is *flagged/documented* the same way, not
+implemented this revision — a new capability to add, not a small
+extension of existing work. **Mitigation path:** GitHub's own Dependabot
+(minimal setup, opens a PR automatically when a pinned dependency has a
+disclosed CVE) in each of the five repos, or an equivalent `pip-audit`
+CI step. Not scheduled — named here so the gap is visible rather than
+assumed away.
 
 ### LLM06:2025 — Excessive Agency
 
@@ -366,11 +386,28 @@ the error instead of re-encoding the raw rejected value. Noted here
 rather than under LLM01 because the actual failure mode is availability —
 an unhandled crash — not content injection.
 
+A fourth amplifier, not yet named anywhere in this section, found during
+this review: neither Block 4's `POST /query` nor Block 8's own API has
+any rate limiting or request throttling (confirmed directly against
+`scripts/api.py` and `app/api.py` — no middleware, no per-client or
+per-IP request cap of any kind). Every request triggers a real Anthropic
+call and a real Neo4j/Pinecone round trip; nothing bounds how many
+requests a single caller — or a script, malicious or just misconfigured —
+can send concurrently. This is the most basic form of unbounded
+consumption there is, and unlike the three amplifiers above, it isn't
+specific to a particular code path — it applies to every request,
+successful or not.
+
 **Decision:** retry/backoff hardening for Block 5 is in scope for Block 7,
 closing the inconsistency against the standard Block 6 Phase 8 already
 established. The unbounded vocabulary-check query is also in scope —
 same fix pattern (`Query(..., timeout=...)`) already used everywhere else
-in `cohort_tool.py`, just not yet applied to this one call site.
+in `cohort_tool.py`, just not yet applied to this one call site. Request-
+volume rate limiting is out of scope for this revision — it's a new,
+larger surface (choosing a limiting strategy, picking limits, wiring it
+into two separate FastAPI apps) rather than a small extension of existing
+work like the items above. Named here explicitly rather than left
+undiscovered.
 
 **Target:** the retry gap is *blocked* — Block 5's retry logic is brought
 up to Block 6 Phase 8's standard (exponential backoff, exception
@@ -384,7 +421,15 @@ exhaustive-query cost risk is *flagged*, not capped — a hard limit would
 reintroduce the undercounting problem this agent exists to solve, so
 instead result size/cost is logged with a configurable soft-alert
 threshold, making an anomalously large result set visible in tracing
-rather than silent.
+rather than silent. Request-volume rate limiting is
+*flagged/documented*, not blocked or scheduled — naming the gap is this
+revision's only action. **Mitigation path:** an API-layer rate limiter
+(e.g. `slowapi` for FastAPI) keyed on client IP in the absence of any
+authentication layer (see LLM02's network/API-layer gap — the two gaps
+compound: no auth means no natural per-caller identity to rate-limit
+against beyond IP), or throttling enforced at a reverse proxy/API gateway
+in front of both services. Not scheduled — contingent on the same
+auth-layer decision named in LLM02.
 
 **Retry policy (confirmed against Block 6's actual Phase 8 code —
 `cohort_agent.py`'s `_MAX_TOOL_RETRIES`/`_RETRY_BACKOFF_SECONDS`):** up to
