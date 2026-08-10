@@ -107,11 +107,19 @@ specific test proving its blocked/flagged claim.
 **LLM01 — Prompt Injection**
 
 - Direct injection (caller-supplied `condition`/`lab`/`drug_a`/`drug_b`):
-  *flagged*, not blocked — an out-of-vocabulary or injection-shaped value
-  surfaces as a logged flag, the run still completes normally, control
-  flow never changes. `genai-block5-agent/block5_agent/plausibility_check.py`,
-  proven by `tests/test_plausibility_check.py` (10 tests) and
-  `tests/test_agent_plausibility.py` (3 tests, including
+  *blocked* for structural injection markers — role prefixes and
+  chat-template delimiters are stripped by `sanitize_field()`
+  (`genai-block5-agent/block5_agent/schemas.py`) before any of these
+  fields reach a prompt or the RAG query text, proven by
+  `tests/test_schemas.py`'s `sanitize_field` coverage plus its
+  `build_rag_query`/`assemble_question_text` clean-output tests, and by
+  `tests/test_default_answer_fn.py::test_default_answer_fn_prompt_is_clean_for_planted_injection_in_drug_a`
+  (the one test proving `_default_answer_fn`'s own direct `drug_a`/
+  `drug_b` re-embed is covered too, not just the shared builder
+  functions). Still *flagged*, not blocked, for a structurally-clean
+  value that simply isn't a real clinical term —
+  `plausibility_check.py`, proven by `tests/test_plausibility_check.py`
+  (10 tests) and `tests/test_agent_plausibility.py` (3 tests, including
   `test_implausible_condition_is_flagged_but_run_completes_normally`).
 - Indirect injection, Path A (citations): *blocked*.
   `genai-block6-multiagent/scripts/citation_sanitization.py`, proven by

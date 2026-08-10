@@ -57,13 +57,25 @@ payloads and non-finite numeric input — but are not content-level
 injection filtering: a value well within 200 characters and still
 entirely instruction-like text passes through unchanged. So whatever a
 caller puts in `condition`/`lab`/`drug_a`/`drug_b`, within these bounds,
-still reaches an LLM prompt verbatim, via direct string interpolation,
-not model-mediated parsing. This path remains untested against injected
-content today — e.g. instruction-like text placed in `condition`, or
-attempts to make the assembled question text read as a new instruction
-rather than a clinical term. This is a live, caller-controlled surface,
-not a hypothetical one — the earlier framing of this as an LLM-parsing
-step described a flow that doesn't exist anywhere in Blocks 5, 6, or 8.
+reached an LLM prompt verbatim, via direct string interpolation, not
+model-mediated parsing. This is now closed: `schemas.py`'s
+`sanitize_field()` (added this review, Phase 17) strips the same
+structural injection markers Block 4's `sanitize_chunk_text()` strips —
+role prefixes (`System:`, `Human:`, `Assistant:`, `User:`) and
+chat-template delimiters (`[INST]`, `<|...|>`, `### Instruction`) — from
+`condition`/`lab`/`drug_a`/`drug_b` at every point one of these fields
+reaches an LLM prompt or the RAG query text: inside `build_rag_query()`
+(condition/lab), inside `assemble_question_text()` (all four fields), and
+inside `_default_answer_fn`'s own direct `drug_a`/`drug_b` re-embed on its
+"count:" lines (`agent.py`) — the one reach that doesn't route through
+`assemble_question_text()` and would otherwise have stayed open even
+after sanitizing only the shared builder functions. Deliberately not
+applied before `check_plausibility()` sees these same four fields (see
+Target below), so that check keeps its exact-match logic and its flag
+messages describing what the caller actually sent. This is a live,
+caller-controlled surface, not a hypothetical one — the earlier framing
+of this as an LLM-parsing step described a flow that doesn't exist
+anywhere in Blocks 5, 6, or 8.
 
 Indirect: raw patient note text (`chunk_text`) has two separate downstream
 paths, and they must not be conflated.
@@ -125,13 +137,24 @@ above. The Block 6 citation-sanitization step (Path A) is kept as a
 second layer protecting the rendering path, even though that path doesn't
 reach an LLM prompt today.
 
-**Target:** direct injection attempts are *flagged* — tests assert the
-caller-supplied `condition`/`lab`/`drug_a`/`drug_b` values stay within
-expected domain (e.g. `condition` is a plausible clinical term, not an
-instruction fragment); a value that's validly-typed and within length
-limits but still implausible as a real clinical term must still surface
-in tracing, since type-validity and length alone don't prove a value is
-legitimate. Indirect injection is *blocked* on both paths: Block 4's
+**Target:** direct injection now has two complementary layers, not one.
+Structural injection markers are *blocked*: `sanitize_field()` strips
+role prefixes and chat-template delimiters from `condition`/`lab`/
+`drug_a`/`drug_b` before any of them reach a prompt or the RAG query text
+(see Direct above) — proven by
+`genai-block5-agent/tests/test_schemas.py`'s `sanitize_field` unit
+coverage plus its `build_rag_query`/`assemble_question_text` clean-output
+tests, and by
+`tests/test_default_answer_fn.py::test_default_answer_fn_prompt_is_clean_for_planted_injection_in_drug_a`
+— the one test exercising `_default_answer_fn`'s real prompt directly
+rather than the stubbed `answer_fn` every other agent test substitutes,
+proving the `agent.py`-only reach is closed too, not just the shared
+builder functions. Separately, and still *flagged*, not blocked: a value
+that's structurally clean but simply isn't a real clinical term —
+`condition`/`lab`/`drug_a`/`drug_b` compared against the graph's actual
+vocabulary — must still surface in tracing rather than being silently
+accepted, since passing the structural sanitizer proves a value is
+harmless to interpolate, not that it's a genuine clinical term. Indirect injection is *blocked* on both paths: Block 4's
 `generate_answer` never receives unsanitized `chunk_text` (proven by a
 test asserting the constructed prompt is clean for a seed note containing
 an injection attempt), and `MultiAgentAnswer.citations` is separately
